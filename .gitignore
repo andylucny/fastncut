@@ -205,3 +205,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# exclude png and tif (assets to be jpg)
+.png
+.tif
