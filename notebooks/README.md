@@ -1,3 +1,3 @@
 | Notebook | Link |
 |-----------|------|
-| publish to pypi (for the author only) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/master/notebooks/pypi.ipynb) |
+| publish to pypi (for the author only) | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/tree/main/notebooks/pypi.ipynb) |
