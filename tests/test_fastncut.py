@@ -7,8 +7,8 @@ import torch.nn as nn
 from torchvision.transforms.functional import gaussian_blur
 import pytest
 
-from fastncut import ncut, toCosSin, extendWithPositionEncoding, extendWithFix
-from fastncut import Ncut, ToCosSin, ExtendWithPositionEncoding, ExtendWithFix
+from fastncut import ncut, toCosSin, extendWithPositionEncoding, extendWithFix, correlateWithPrompt
+from fastncut import Ncut, ToCosSin, ExtendWithPositionEncoding, ExtendWithFix, CorrelateWithPrompt
 
 import numpy as np
 import cv2
@@ -67,15 +67,15 @@ def one(input, init="frame", num_iters=2, any_polarity=True, save=None, pe=0, ma
         x = input
     
     x = x.to(device)
-    x = toCosSin(x, data_format="CHW" if len(x.shape) == 3 else "BCHW")
+    x = toCosSin(x, data_format="chw" if len(x.shape) == 3 else "bchw")
     if fix:
-        x = extendWithFix(x, data_format="CHW" if len(x.shape) == 3 else "BCHW")
+        x = extendWithFix(x, data_format="chw" if len(x.shape) == 3 else "bchw")
     if pe > 0:
-        x = extendWithPositionEncoding(x, weight=pe, data_format="CHW" if len(x.shape) == 3 else "BCHW")
+        x = extendWithPositionEncoding(x, weight=pe, data_format="chw" if len(x.shape) == 3 else "bchw")
     
-    data_format = "CHW" if len(x.shape) == 3 else "BCHW"
+    data_format = "chw" if len(x.shape) == 3 else "bchw"
     if hwc:
-        data_format = "HWC" if len(x.shape) == 3 else "BHWC"
+        data_format = "hwc" if len(x.shape) == 3 else "bhwc"
         x = x.permute(1,2,0) if len(x.shape) == 3 else x.permute(0,2,3,1)
     
     result = ncut(x, num_iters=num_iters, data_format=data_format, init=init, mask=mask, return_all=return_all)
@@ -172,13 +172,61 @@ def test_model():
     batch = torch.stack([ 
         torch.stack([island(),island(),island()]),
         torch.stack([island(),island(),island()]),
-    ])
+    ]).to(device)
     model = nn.Sequential(
         ToCosSin(),
         ExtendWithFix(), # redundant
         ExtendWithPositionEncoding(), # optional
-        Ncut(num_iters=1)
-    )
-    result = model(batch)
-    pattern = (batch > 0.5).max(dim=1).values
+        Ncut(num_iters=1),
+    ).to(device)
+    with torch.no_grad():
+        result = model(batch)
+        pattern = (batch > 0.5).max(dim=1).values
     assert eq(result,pattern)
+
+def test_model_hwc():
+    batch = torch.stack([ 
+        torch.stack([island(),island(),island()]),
+        torch.stack([island(),island(),island()]),
+    ]).to(device).permute(0,2,3,1)
+    print('batch',batch.shape)
+    model = nn.Sequential(
+        ToCosSin(data_format='bhwc'),
+        ExtendWithFix(data_format='bhwc'), # redundant
+        ExtendWithPositionEncoding(data_format='bhwc'), # optional
+        Ncut(num_iters=1, data_format='bhwc'),
+    ).to(device)
+    with torch.no_grad():
+        result = model(batch)
+        pattern = (batch > 0.5).max(dim=3).values
+    assert eq(result,pattern)
+
+def test_convergence():
+    feats = torch.rand(6,224,244).to(device)
+    result = ncut(feats, num_iters=0, return_all=True)
+    with open('iterations.txt','wt') as f:
+        f.write(str(result['num_iters']))
+    assert(result['num_iters'] > 0)
+
+def test_wrap_around():
+    hue = torch.arange(18,device=device).unsqueeze(0).unsqueeze(-1).float()/18
+    feats = toCosSin(hue, data_format='hwc', wrap_around=True)
+    assert( feats[0,0] @ feats[0,-1] > feats[0,3] @ feats[0,-4] )
+    feats = extendWithPositionEncoding(feats, data_format='hwc', wrap_around_x=True)
+    pe = feats[...,2:]
+    assert( pe[0,0] @ pe[0,-1] > pe[0,3] @ pe[0,-4] )
+
+def test_correlate():
+    prompt = [(0,0)]
+    feats = torch.rand(6,224,224).to(device)
+    feats /= torch.linalg.norm(feats, dim=0, keepdim=True) + 1e-8
+    feats = correlateWithPrompt(feats, prompt)
+    assert(len(feats.shape) == 3)
+    assert(feats.shape[0] == 1)
+    assert(feats.max() == feats[0,0,0])
+    feats = feats.permute(1,2,0)
+    feats = correlateWithPrompt(feats, prompt*4, data_format='hwc')
+    assert(len(feats.shape) == 3)
+    assert(feats.shape[2] == 4)
+    assert(feats.max() == feats[0,0,0])
+    

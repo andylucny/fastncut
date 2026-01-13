@@ -55,7 +55,7 @@ def ncut(
     num_iters: int = 2,
     mask: Optional[Tensor] = None, 
     init: Union[None, Tensor, Tuple[int, int], List[Tuple[int, int]], Literal["frame", "full", "random", "chessboard"]] = "frame",
-    data_format: Literal["HWC", "CHW", "BHWC", "BCHW"] = "CHW",
+    data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
     patience: int = 1,
     return_all: bool = False,
     border_size: int = 2,
@@ -71,10 +71,10 @@ def ncut(
     features : torch.Tensor (float)
         Input feature tensor. The expected shape depends on the `data_format`
         argument:
-        - "HWC": (Height, Width, Channels) 
-        - "CHW": (Channels, Width, Height) - Default
-        - "BHWC": (Batch, Height, Width, Channels) 
-        - "BCWH": (Batch, Channels, Width, Height) 
+        - "hwc": (Height, Width, Channels) 
+        - "chw": (Channels, Height, Width) - Default
+        - "bhwc": (Batch, Height, Width, Channels) 
+        - "bchw": (Batch, Channels, Height, Width) 
 
     num_iters : int, optional
         Number of iterations to perform. 
@@ -123,9 +123,9 @@ def ncut(
 
     """
     # features are expected to have shape (B,H,W,C) 
-    if data_format == "HWC" or data_format == "CHW":
+    if data_format == "hwc" or data_format == "chw":
         features = features.unsqueeze(0) # add B
-    if data_format == "BCHW" or data_format == "CHW":
+    if data_format == "bchw" or data_format == "chw":
         features = features.permute(0,2,3,1) # (B,C,H,W) -> (B,H,W,C)
     B, H, W, C = features.shape   
     
@@ -227,7 +227,7 @@ def ncut(
         
         i += 1
 
-    if data_format == "HWC" or data_format == "CHW":
+    if data_format == "hwc" or data_format == "chw":
         bipartition = bipartition.squeeze(0) # remove B
         if return_all:
             intermediates = [ intermediate.squeeze(0) for intermediate in intermediates ]
@@ -250,7 +250,7 @@ class Ncut(nn.Module):
     def __init__(self, 
         num_iters: int = 1,
         init: Union[None, Tensor, Literal["frame", "full", "random", "chessboard"]] = "frame",
-        data_format: Literal["BHWC", "BCHW"] = "BCHW",
+        data_format: Literal["bhwc", "bchw"] = "bchw",
     ):
         super(Ncut, self).__init__()
         self.num_iters = num_iters
@@ -264,34 +264,36 @@ class Ncut(nn.Module):
         return ncut(features, self.num_iters, mask, init=self.init, data_format=self.data_format, return_all=False)
 
 format2dim = {
-    "BHWC": 3, 
-    "BCHW": 1, 
-    "HWC": 2, 
-    "CHW": 0,
+    "hwc": 2, 
+    "chw": 0,
+    "bhwc": 3, 
+    "bchw": 1, 
 }
 
 format2height = {
-    "BHWC": 1, 
-    "BCHW": 2, 
-    "HWC": 0, 
-    "CHW": 1,
+    "hwc": 0, 
+    "chw": 1,
+    "bhwc": 1, 
+    "bchw": 2, 
 }
 
 format2width = {
-    "BHWC": 2, 
-    "BCHW": 3, 
-    "HWC": 1, 
-    "CHW": 2,
+    "hwc": 1, 
+    "chw": 2,
+    "bhwc": 2, 
+    "bchw": 3, 
 }
 
 def toCosSin(
     features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
-    data_format: Literal["BHWC", "BCHW", "HWC", "CHW"] = "CHW",
+    data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
+    wrap_around: bool = False, # e.g. for length or angle 0-π/2 this is False, but for angle 0-2π this should be True
     eps: float = 1e-5,
 ):
     """Convert intensity or color features [0, 255] or [0, 1] → [0, π/2-ε] and return [cos, sin] channels."""
     dim = format2dim[data_format]
-    x = features * (torch.pi/2 - eps)  # scale 0–1 → 0–π/2
+    coef = 2*torch.pi - eps if wrap_around else torch.pi/2 - eps
+    x = coef * features # scale 0–1 → 0–π/2 or 0-2π
     return torch.cat([
         torch.cos(x), 
         torch.sin(x),
@@ -301,30 +303,37 @@ def toCosSin(
 class ToCosSin(nn.Module):
     """Convert intensity or color features [0, 255] or [0, 1] → [0, π/2-ε] and return [cos, sin] channels."""
     def __init__(self, 
-        data_format: Literal["BHWC", "BCHW", "HWC", "CHW"] = "BCHW",
+        data_format: Literal["bhwc", "bchw"] = "bchw",
+        wrap_around: bool = False,
         eps: float = 1e-5,
     ):
+        super(ToCosSin, self).__init__()
         self.data_format = data_format
+        self.wrap_around = wrap_around
         self.eps = eps
     
     def __call__(self, 
         features: torch.Tensor, 
     ): 
-        return toCosSin(features, self.data_format, self.eps)
+        return toCosSin(features, self.data_format, self.wrap_around, self.eps)
 
 def extendWithPositionEncoding(
     features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format` 
-    weight: float = 0.5, 
-    data_format: Literal["BHWC", "BCHW", "HWC", "CHW"] = "CHW",
+    weight: float = 0.59, 
+    data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
+    wrap_around_x: bool = False, # for "tire" should be True
+    wrap_around_y: bool = False, 
     eps: float = 1e-5,
 ):
     """Features extension with the positional encoding"""
     dim = format2dim[data_format]
     shape = features.shape
     H, W = shape[format2height[data_format]], shape[format2width[data_format]]
+    coef_y = 2*torch.pi - eps if wrap_around_y else torch.pi/2 - eps
+    coef_x = 2*torch.pi - eps if wrap_around_x else torch.pi/2 - eps
     y, x = torch.meshgrid(
-        (torch.pi/2 - eps) * torch.arange(H).to(features.device) / (H-1),
-        (torch.pi/2 - eps) * torch.arange(W).to(features.device) / (W-1),
+        coef_y * torch.arange(H).to(features.device) / H,
+        coef_x * torch.arange(W).to(features.device) / W,
         indexing="ij",
     )
     if dim in (1,3):
@@ -342,23 +351,28 @@ def extendWithPositionEncoding(
 class ExtendWithPositionEncoding(nn.Module):
     """Features extension with the positional encoding"""
     def __init__(self,
-        weight: float = 0.5,    
-        data_format: Literal["BHWC", "BCHW", "HWC", "CHW"] = "BCHW",
+        weight: float = 0.59,    
+        data_format: Literal["bhwc", "bchw"] = "bchw",
+        wrap_around_x: bool = False,
+        wrap_around_y: bool = False,
         eps: float = 1e-5,
     ):
+        super(ExtendWithPositionEncoding, self).__init__()
         self.weight = weight
         self.data_format = data_format
+        self.wrap_around_x = wrap_around_x
+        self.wrap_around_y = wrap_around_y
         self.eps = eps
     
     def __call__(self, 
         features: torch.Tensor, 
     ): 
-        return extendWithPositionEncoding(features, self.weight, self.data_format, self.eps)
+        return extendWithPositionEncoding(features, self.weight, self.data_format, self.wrap_around_x, self.wrap_around_y, self.eps)
 
 def extendWithFix(
-        features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
-        data_format: Literal["BHWC", "BCHW", "HWC", "CHW"] = "CHW",
-        eps: float = 1e-5,
+    features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
+    data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
+    eps: float = 1e-5,
 ):
     """Extend the cosine similarity features by adding a feature that ensures the ncut algorithm is applicable."""
     dim = format2dim[data_format]
@@ -374,9 +388,10 @@ def extendWithFix(
 class ExtendWithFix(nn.Module):
     """Extend the cosine similarity features by adding a feature that ensures the ncut algorithm is applicable."""
     def __init__(self, 
-        data_format: Literal["BHWC", "BCHW", "HWC", "CHW"] = "BCHW",
+        data_format: Literal["bhwc", "bchw"] = "bchw",
         eps: float = 1e-5,
     ):
+        super(ExtendWithFix, self).__init__()
         self.data_format = data_format
         self.eps = eps
     
@@ -385,3 +400,43 @@ class ExtendWithFix(nn.Module):
     ): 
         return extendWithFix(features, self.data_format, self.eps)
 
+def correlateWithPrompt(
+    features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
+    prompt: List[Tuple[int,int]], # a list of tuples of integers (x,y), pointing to regions of the segmented object
+    data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
+):
+    """Turn general features into the features describing similarity to a given list of regions (samples of segmented object)"""
+    coords = torch.tensor(prompt, device=features.device)  # shape (C, 2)
+    x, y = coords[:, 0], coords[:, 1]  # (C,)
+    
+    # features are expected to have shape (B,H,W,C) 
+    if data_format == "hwc" or data_format == "chw":
+        features = features.unsqueeze(0) # add B
+    if data_format == "bchw" or data_format == "chw":
+        features = features.permute(0,2,3,1) # (B,C,H,W) -> (B,H,W,C)
+    
+    # features'[b,h,w,c] == features[b,h,w] @ features[b,y[c],x[c]]
+    B, H, W, C = features.shape
+    features = torch.bmm(features.view(B, H*W, C), features[:, y, x, :].permute(0,2,1)).view(B, H, W, -1)
+    
+    # return features to the original shape
+    if data_format == "bchw" or data_format == "chw":
+        features = features.permute(0,3,1,2) # (B,H,W,C) -> (B,C,H,W)
+    if data_format == "hwc" or data_format == "chw":
+        features = features.squeeze(0) # remove B
+    
+    return features
+
+class CorrelateWithPrompt(nn.Module):
+    """Extend the cosine similarity features by adding a feature that ensures the ncut algorithm is applicable."""
+    def __init__(self, 
+        data_format: Literal["bhwc", "bchw"] = "bchw",
+    ):
+        super(CorrelateWithPrompt, self).__init__()
+        self.data_format = data_format
+    
+    def __call__(self, 
+        features: torch.Tensor, 
+        prompt: List[Tuple[int,int]], # a list of tuples of integers (x,y), pointing to regions of the segmented object    
+    ): 
+        return correlateWithPrompt(features, prompt, self.data_format)
