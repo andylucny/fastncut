@@ -287,7 +287,7 @@ format2width = {
 
 def toCosSin(
     features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
-    scale: float = 1/255.0,
+    scale: float = 1.0,
     data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
     wrap_around: bool = False, # e.g. for length or angle 0-π/2 this is False, but for angle 0-2π this should be True
     eps: float = 1e-5,
