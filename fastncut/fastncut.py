@@ -8,6 +8,7 @@ import torch
 from torch import Tensor
 import torch.nn as nn
 import torch.nn.functional as F
+import math
 
 def unpr(
     u: Tensor, 
@@ -260,7 +261,7 @@ class Ncut(nn.Module):
     def forward(self, 
         features: Tensor,
         mask: Optional[Tensor] = None,
-    ):
+    ) -> Tensor:
         return ncut(features, self.num_iters, mask, init=self.init, data_format=self.data_format, return_all=False)
 
 format2dim = {
@@ -285,46 +286,48 @@ format2width = {
 }
 
 def toCosSin(
-    features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
+    features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
+    scale: float = 1/255.0,
     data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
     wrap_around: bool = False, # e.g. for length or angle 0-π/2 this is False, but for angle 0-2π this should be True
     eps: float = 1e-5,
-):
-    """Convert intensity or color features [0, 255] or [0, 1] → [0, π/2-ε] and return [cos, sin] channels."""
+) -> Tensor:
+    """Convert features [0, 1/scale] → [0, π/2-ε] and return [cos, sin] channels."""
     dim = format2dim[data_format]
     coef = 2*torch.pi - eps if wrap_around else torch.pi/2 - eps
-    x = coef * features # scale 0–1 → 0–π/2 or 0-2π
+    x = coef * features * scale # scale 0–1 → 0–π/2 or 0-2π
     return torch.cat([
         torch.cos(x), 
         torch.sin(x),
     ], dim=dim) # (B,2*C,H,W), (B,H,W,2*C), (2*C,H,W) or (H,W,2*C) accordig to `data_format`
 
-
 class ToCosSin(nn.Module):
-    """Convert intensity or color features [0, 255] or [0, 1] → [0, π/2-ε] and return [cos, sin] channels."""
+    """Convert features [0, 1/scale] → [0, π/2-ε] and return [cos, sin] channels."""
     def __init__(self, 
+        scale: float = 1.0,
         data_format: Literal["bhwc", "bchw"] = "bchw",
         wrap_around: bool = False,
         eps: float = 1e-5,
     ):
         super(ToCosSin, self).__init__()
+        self.scale = scale
         self.data_format = data_format
         self.wrap_around = wrap_around
         self.eps = eps
     
     def __call__(self, 
-        features: torch.Tensor, 
-    ): 
-        return toCosSin(features, self.data_format, self.wrap_around, self.eps)
+        features: Tensor, 
+    ) -> Tensor: 
+        return toCosSin(features, self.scale, self.data_format, self.wrap_around, self.eps)
 
 def extendWithPositionEncoding(
-    features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format` 
+    features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format` 
     weight: float = 0.59, 
     data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
     wrap_around_x: bool = False, # for "tire" should be True
     wrap_around_y: bool = False, 
     eps: float = 1e-5,
-):
+) -> Tensor:
     """Features extension with the positional encoding"""
     dim = format2dim[data_format]
     shape = features.shape
@@ -365,15 +368,15 @@ class ExtendWithPositionEncoding(nn.Module):
         self.eps = eps
     
     def __call__(self, 
-        features: torch.Tensor, 
-    ): 
+        features: Tensor, 
+    ) -> Tensor: 
         return extendWithPositionEncoding(features, self.weight, self.data_format, self.wrap_around_x, self.wrap_around_y, self.eps)
 
 def extendWithFix(
-    features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
+    features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
     data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
     eps: float = 1e-5,
-):
+) -> Tensor:
     """Extend the cosine similarity features by adding a feature that ensures the ncut algorithm is applicable."""
     dim = format2dim[data_format]
     value = features.norm(dim=dim).abs().max() + eps
@@ -396,15 +399,15 @@ class ExtendWithFix(nn.Module):
         self.eps = eps
     
     def __call__(self, 
-        features: torch.Tensor
-    ): 
+        features: Tensor
+    ) -> Tensor: 
         return extendWithFix(features, self.data_format, self.eps)
 
 def correlateWithPrompt(
-    features: torch.Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
+    features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
     prompt: List[Tuple[int,int]], # a list of tuples of integers (x,y), pointing to regions of the segmented object
     data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
-):
+) -> Tensor:
     """Turn general features into the features describing similarity to a given list of regions (samples of segmented object)"""
     coords = torch.tensor(prompt, device=features.device)  # shape (C, 2)
     x, y = coords[:, 0], coords[:, 1]  # (C,)
@@ -436,7 +439,7 @@ class CorrelateWithPrompt(nn.Module):
         self.data_format = data_format
     
     def __call__(self, 
-        features: torch.Tensor, 
+        features: Tensor, 
         prompt: List[Tuple[int,int]], # a list of tuples of integers (x,y), pointing to regions of the segmented object    
-    ): 
+    ) -> Tensor: 
         return correlateWithPrompt(features, prompt, self.data_format)
