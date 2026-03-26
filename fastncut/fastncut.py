@@ -493,4 +493,4 @@ def targetFromMask(
         b = custom_b
     target = torch.where(mask, 1.0, -b).float() #?float
     target = torch.nn.functional.normalize(target, dim=1)
-    return target, b
+    return target, b 

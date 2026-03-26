@@ -271,4 +271,4 @@ def test_target():
 def test_auto_fix():
     feats = (torch.rand(2, 32, 1080, 1620).float()-0.5).to(device)
     result = ncut(feats, data_format='bchw', num_iters=1, auto_fix=True, return_all=True)
-    assert result['d'][0].min().item() > 1e-5
+    assert result['d'][0].min().item() > 1e-5 
