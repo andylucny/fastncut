@@ -9,6 +9,7 @@ import pytest
 
 from fastncut import ncut, toCosSin, extendWithPositionEncoding, extendWithFix, correlateWithPrompt
 from fastncut import Ncut, ToCosSin, ExtendWithPositionEncoding, ExtendWithFix, CorrelateWithPrompt
+from fastncut import targetFromMask
 
 import numpy as np
 import cv2
@@ -54,7 +55,7 @@ def topng(x, prompt_x=None, prompt_y=None):
 def totif(x):
     return x.detach().float().cpu().numpy()
     
-def one(input, init="frame", num_iters=2, any_polarity=True, save=None, pe=0, mask=None, pattern=None, tolerance=1.0, fix=False, hwc=False, colored=False, return_all=True):
+def one(input, init="frame", num_iters=2, any_polarity=True, save=None, pe=0, mask=None, pattern=None, tolerance=1.0, fix=False, auto_fix=False, hwc=False, colored=False, return_all=True):
     if len(input.shape) == 2:
         x = input.unsqueeze(0)
         if colored:
@@ -78,7 +79,7 @@ def one(input, init="frame", num_iters=2, any_polarity=True, save=None, pe=0, ma
         data_format = "hwc" if len(x.shape) == 3 else "bhwc"
         x = x.permute(1,2,0) if len(x.shape) == 3 else x.permute(0,2,3,1)
     
-    result = ncut(x, num_iters=num_iters, data_format=data_format, init=init, mask=mask, return_all=return_all)
+    result = ncut(x, num_iters=num_iters, data_format=data_format, init=init, mask=mask, return_all=return_all, auto_fix=auto_fix)
     output = result['bipartition'].cpu() if return_all else result.cpu()
     pattern = pattern if pattern is not None else (input > 0.5)
     
@@ -131,9 +132,18 @@ def test_one_gradient():
 
 def test_one_island_fix():
     one(island(), "frame", 1, False, "IF", fix=True)
+    one(island(), "frame", 1, False, "IF", auto_fix=True)
 
 def test_one_hwc():
     one(island(), "frame", 1, False, fix=True, hwc=True)
+    one(island(), "frame", 1, False, auto_fix=True, hwc=True)
+    
+def test_one_nc():
+    input = island().reshape(1,1,-1).permute(0,2,1)
+    batch = toCosSin(input,wrap_around=True,data_format="bnc")
+    batch = extendWithFix(batch,data_format="bnc")
+    assert abs(batch[:,:,2].min().item() - 1.0) < 1e-2
+    assert abs(batch[:,:,2].max().item() - 1.0) < 1e-2
 
 def test_batch():
     batch = torch.stack([ 
@@ -149,6 +159,7 @@ def test_mask():
     mask = (leftright() > 0.5)
     pattern = (input > 0.5) & mask
     one(input, "frame", 1, False, "M", mask=mask, pattern=pattern)
+    one(input, "frame", 1, False, "M", mask=mask, pattern=pattern, auto_fix=True)
     one(input, (140,90), 1, False, "MP", mask=mask, pattern=pattern)
     pattern = ~(input > 0.5) & mask
     one(input, (210,210), 1, False, "MN", mask=mask, pattern=pattern)
@@ -179,6 +190,7 @@ def test_model():
         ExtendWithPositionEncoding(), # optional
         Ncut(num_iters=1),
     ).to(device)
+    model.eval()
     with torch.no_grad():
         result = model(batch)
         pattern = (batch > 0.5).max(dim=1).values
@@ -189,13 +201,13 @@ def test_model_hwc():
         torch.stack([island(),island(),island()]),
         torch.stack([island(),island(),island()]),
     ]).to(device).permute(0,2,3,1)
-    print('batch',batch.shape)
     model = nn.Sequential(
         ToCosSin(data_format='bhwc'),
         ExtendWithFix(data_format='bhwc'), # redundant
         ExtendWithPositionEncoding(data_format='bhwc'), # optional
         Ncut(num_iters=1, data_format='bhwc'),
     ).to(device)
+    model.eval()
     with torch.no_grad():
         result = model(batch)
         pattern = (batch > 0.5).max(dim=3).values
@@ -229,4 +241,34 @@ def test_correlate():
     assert(len(feats.shape) == 3)
     assert(feats.shape[2] == 4)
     assert(feats.max() == feats[0,0,0])
-    
+
+def test_target():
+    bipartition = torch.eye(3).unsqueeze(0).unsqueeze(0) > 0.5
+    d = torch.ones(1,9)
+    eigenvector, b = targetFromMask(bipartition, d)
+    assert eigenvector.dim() == 2
+    assert eigenvector.shape[0] == 1 and eigenvector.shape[1] == 9
+    assert b.dim() == 1
+    assert b.shape[0] == 1
+    assert torch.abs(torch.norm(eigenvector[0]) - 1.0) < 1e-5
+    assert eigenvector[0].mean().abs() < 1e-5
+    assert abs(b[0].item() - 0.5) < 1e-5
+    print("TARGET start")
+    feats = island().unsqueeze(0).to(device)
+    print("TARGET",feats.shape)
+    feats = toCosSin(feats)
+    print("TARGET",feats.shape)
+    result = ncut(feats,return_all=True)
+    eigenvector, b, d = result['eigenvector'], result['b'], result['d']
+    assert eigenvector.dim() == 2
+    assert eigenvector.shape[0] == 1 and eigenvector.shape[1] > 1
+    assert b.dim() == 1
+    assert b.shape[0] == 1
+    assert d.dim() == 2
+    assert d.shape[0] == 1 and d.shape[1] > 1
+    assert d.shape[1] == eigenvector.shape[1]
+
+def test_auto_fix():
+    feats = (torch.rand(2, 32, 1080, 1620).float()-0.5).to(device)
+    result = ncut(feats, data_format='bchw', num_iters=1, auto_fix=True, return_all=True)
+    assert result['d'][0].min().item() > 1e-5

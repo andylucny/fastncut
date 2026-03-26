@@ -60,6 +60,7 @@ def ncut(
     patience: int = 1,
     return_all: bool = False,
     border_size: int = 2,
+    auto_fix: bool = False,
     eps: float = 1e-5
 ) -> Tensor:
     """
@@ -107,11 +108,14 @@ def ncut(
         Determines the output format:
         - False: return only the final bipartition
         - True: return all bipartitions, and further info
+        
+    auto_fix : bool, optional (default False)
+        Apply extendWithFix on features; useful mainly when a mask is specified.
 
     Returns
     -------
     torch.Tensor (bool)
-        The resulting bipartition provided by the fastncut algorithm: (Batch, Height, Width) 
+        The resulting bipartition provided by the fastncut algorithm: (Batch, Height, Width) or (Height, Width)
         If `return_all` is true, returns dictionary containing the complete info including:
         - intermediate results from all iterations (Batch, Height, Width) x num_iters
         - value of the generated init
@@ -124,18 +128,25 @@ def ncut(
 
     """
     # features are expected to have shape (B,H,W,C) 
-    if data_format == "hwc" or data_format == "chw":
+    if features.dim() == 4 and data_format[0] != 'b':
+        data_format = "b" + data_format
+    if data_format in ("hwc", "chw"):
         features = features.unsqueeze(0) # add B
-    if data_format == "bchw" or data_format == "chw":
+    if data_format in ("bchw", "chw"):
         features = features.permute(0,2,3,1) # (B,C,H,W) -> (B,H,W,C)
-    B, H, W, C = features.shape   
-    
+    B, H, W, C = features.shape  
+
     # flatten and normalize the image features
     if mask is None:
-        feats = features.view(B, H*W, C)  # (B,H,W,C) -> (B,H*W,C)
+        feats = features.reshape(B, H*W, C)  # (B,H,W,C) -> (B,H*W,C)
     else:
+        assert(mask.dim() == 2)
         indices = torch.nonzero(mask, as_tuple=False) 
         feats = features[:,indices[:,0],indices[:,1],:] # -> (B,N,C)
+   
+    # fix features (option)
+    if auto_fix:
+        feats = extendWithFix(feats, data_format="bnc")
    
     # Use power iteration to find eigenvector corresponding to the second smallest eigenvalue of 
     # diag(1/√d) @ (diag(d) - featsᵀ @ feats) @ diag(1/√d) for each sample in the batch
@@ -228,14 +239,22 @@ def ncut(
         
         i += 1
 
-    if data_format == "hwc" or data_format == "chw":
+    if data_format in ("hwc", "chw"):
         bipartition = bipartition.squeeze(0) # remove B
         if return_all:
             intermediates = [ intermediate.squeeze(0) for intermediate in intermediates ]
+
+    if return_all:
+        eigenvector = eigenvector.squeeze(-1)
+        d = d.squeeze(-1)
+        b = (d * (eigenvector > 0).float()).sum(dim=1) / ((d * (eigenvector <= 0)).sum(dim=1) + eps)
     
     if return_all:
         return {
             'bipartition': bipartition,
+            'eigenvector': eigenvector,
+            'b': b,
+            'd': d,
             'intermediates': intermediates,
             'mask': mask,
             'init': init,
@@ -267,8 +286,10 @@ class Ncut(nn.Module):
 format2dim = {
     "hwc": 2, 
     "chw": 0,
+    "nc": 1,
     "bhwc": 3, 
-    "bchw": 1, 
+    "bchw": 1,
+    "bnc": 2,
 }
 
 format2height = {
@@ -287,12 +308,14 @@ format2width = {
 
 def toCosSin(
     features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
-    scale: float = 1.0,
+    scale: float = 1.0, # 1 or 1/255
     data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
     wrap_around: bool = False, # e.g. for length or angle 0-π/2 this is False, but for angle 0-2π this should be True
     eps: float = 1e-5,
 ) -> Tensor:
     """Convert features [0, 1/scale] → [0, π/2-ε] and return [cos, sin] channels."""
+    if features.dim() == 4 and data_format[0] != 'b':
+        data_format = "b" + data_format
     dim = format2dim[data_format]
     coef = 2*torch.pi - eps if wrap_around else torch.pi/2 - eps
     x = coef * features * scale # scale 0–1 → 0–π/2 or 0-2π
@@ -329,6 +352,8 @@ def extendWithPositionEncoding(
     eps: float = 1e-5,
 ) -> Tensor:
     """Features extension with the positional encoding"""
+    if features.dim() == 4 and data_format[0] != 'b':
+        data_format = "b" + data_format
     dim = format2dim[data_format]
     shape = features.shape
     H, W = shape[format2height[data_format]], shape[format2width[data_format]]
@@ -374,19 +399,24 @@ class ExtendWithPositionEncoding(nn.Module):
 
 def extendWithFix(
     features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
-    data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
+    data_format: Literal["hwc", "chw", "nc", "bhwc", "bchw", "bnc"] = "chw",
+    return_offset: bool = False,
     eps: float = 1e-5,
 ) -> Tensor:
     """Extend the cosine similarity features by adding a feature that ensures the ncut algorithm is applicable."""
+    if features.dim() == 4 and data_format[0] != 'b':
+        data_format = "b" + data_format
     dim = format2dim[data_format]
-    value = features.norm(dim=dim).abs().max() + eps
+    offset = features.norm(dim=dim).abs().max() + eps # () - offset is a scalar but of the type Tensor 
     shape = list(features.shape)
     shape[dim] = 1
     shape = tuple(shape)
-    return torch.cat([
-        features, 
-        torch.full(shape, value, device=features.device, dtype=features.dtype),
-    ], dim=dim) # (B,C+1,H,W), (B,H,W,C+1), (C+1,H,W) or (H,W,C+1) accordig to `data_format`
+    extension = torch.full(shape, offset.item(), device=features.device, dtype=features.dtype)
+    extended_features = torch.cat([features, extension], dim=dim) # (B,C+1,H,W), (B,H,W,C+1), (C+1,H,W) or (H,W,C+1) accordig to `data_format`
+    if return_offset:
+        return extended_features, offset
+    else:
+        return extended_features
 
 class ExtendWithFix(nn.Module):
     """Extend the cosine similarity features by adding a feature that ensures the ncut algorithm is applicable."""
@@ -401,7 +431,7 @@ class ExtendWithFix(nn.Module):
     def __call__(self, 
         features: Tensor
     ) -> Tensor: 
-        return extendWithFix(features, self.data_format, self.eps)
+        return extendWithFix(features, self.data_format, eps=self.eps)
 
 def correlateWithPrompt(
     features: Tensor, # (B,C,H,W), (B,H,W,C), (C,H,W) or (H,W,C) accordig to `data_format`
@@ -413,19 +443,21 @@ def correlateWithPrompt(
     x, y = coords[:, 0], coords[:, 1]  # (C,)
     
     # features are expected to have shape (B,H,W,C) 
-    if data_format == "hwc" or data_format == "chw":
+    if features.dim() == 4 and data_format[0] != 'b':
+        data_format = "b" + data_format
+    if data_format in ("hwc", "chw"):
         features = features.unsqueeze(0) # add B
-    if data_format == "bchw" or data_format == "chw":
+    if data_format in ("bchw", "chw"):
         features = features.permute(0,2,3,1) # (B,C,H,W) -> (B,H,W,C)
     
     # features'[b,h,w,c] == features[b,h,w] @ features[b,y[c],x[c]]
     B, H, W, C = features.shape
-    features = torch.bmm(features.view(B, H*W, C), features[:, y, x, :].permute(0,2,1)).view(B, H, W, -1)
+    features = torch.bmm(features.reshape(B, H*W, C), features[:, y, x, :].permute(0,2,1)).view(B, H, W, -1)
     
     # return features to the original shape
-    if data_format == "bchw" or data_format == "chw":
+    if data_format in ("bchw", "chw"):
         features = features.permute(0,3,1,2) # (B,H,W,C) -> (B,C,H,W)
-    if data_format == "hwc" or data_format == "chw":
+    if data_format in ("hwc", "chw"):
         features = features.squeeze(0) # remove B
     
     return features
@@ -443,3 +475,22 @@ class CorrelateWithPrompt(nn.Module):
         prompt: List[Tuple[int,int]], # a list of tuples of integers (x,y), pointing to regions of the segmented object    
     ) -> Tensor: 
         return correlateWithPrompt(features, prompt, self.data_format)
+
+def targetFromMask(
+    mask: Tensor, # (B,H,W,C) or (B,C,H,W)
+    d: Tensor = None, # (B,H*W)
+    custom_b: Tensor = None, #(B)
+    eps: float = 1e-7,
+) -> Tuple[Tensor, Tensor]: # (B,H*W), (B)
+    """Calculate the eigenvector corresponding to the target mask"""
+    assert (d is not None) or (custom_b is not None)
+    mask = mask.reshape(mask.shape[0],-1)
+    if mask.dtype != torch.bool:
+        mask = mask > 0
+    if custom_b is None:
+        b = (d * mask.float()).sum(dim=1) / ((d * (~mask).float()).sum(dim=1) + eps)
+    else:
+        b = custom_b
+    target = torch.where(mask, 1.0, -b).float() #?float
+    target = torch.nn.functional.normalize(target, dim=1)
+    return target, b
