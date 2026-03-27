@@ -12,9 +12,8 @@ pip install fastncut
 ## Usage
 
 ```bash
-from fastncut import fastNCut, FastNCut
-bipartition = fastNCut(features,*options)
-bipartition = FastNCut(*options)(features)
+from fastncut import ncut
+bipartition = ncut(features)
 ```
 
 ## Model zoo
