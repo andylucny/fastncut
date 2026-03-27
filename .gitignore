@@ -209,3 +209,7 @@ __marimo__/
 # exclude png and tif (assets to be jpg)
 *.png
 *.tif
+*.bmp
+
+# trash
+_/
