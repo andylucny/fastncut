@@ -4,6 +4,7 @@
 | NCut on hue| [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/main/notebooks/demo-hue.ipynb) |
 | NCut on DINOv3 features | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/main/notebooks/demo-dinov3.ipynb) |
 | compare NCut and fast NCut | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/main/notebooks/comparison.ipynb) |
+| name image with a controversial content (CLIP + 2xNCut | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/main/notebooks/bird-or-dog.ipynb) |
 | investigate DINO v1 features | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/main/notebooks/cocoval-dinov1.ipynb) |
 | investigate DINO v2 features | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/main/notebooks/cocoval-dinov2.ipynb) |
 | investigate DINO v3 features | [![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/andylucny/fastncut/blob/main/notebooks/cocoval-dinov3.ipynb) |
