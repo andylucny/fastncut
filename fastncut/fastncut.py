@@ -271,17 +271,19 @@ class Ncut(nn.Module):
         num_iters: int = 1,
         init: Union[None, Tensor, Literal["frame", "full", "random", "chessboard"]] = "frame",
         data_format: Literal["bhwc", "bchw"] = "bchw",
+        auto_fix: bool = False,
     ):
         super(Ncut, self).__init__()
         self.num_iters = num_iters
         self.init = init
         self.data_format = data_format
+        self.auto_fix = auto_fix
 
     def forward(self, 
         features: Tensor,
         mask: Optional[Tensor] = None,
     ) -> Tensor:
-        return ncut(features, self.num_iters, mask, init=self.init, data_format=self.data_format, return_all=False)
+        return ncut(features, self.num_iters, mask, init=self.init, data_format=self.data_format, return_all=False, auto_fix=self.auto_fix)
 
 format2dim = {
     "hwc": 2, 

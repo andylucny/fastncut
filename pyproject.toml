@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "fastncut"
 version = "2.0.0"
-description = "Example Python package without src layout"
+description = "An agnostic algorithm for bipartitioning of feature maps. Really fast, even for high resolutions."
 requires-python = ">=3.8"
 
 [tool.setuptools.packages.find]
