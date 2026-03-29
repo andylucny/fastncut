@@ -43,7 +43,7 @@ def unpr(
     Examples
     --------
     >>> B, N, C = 1, 784, 384
-    >>> u = torch.randn(B, N, K)
+    >>> u = torch.randn(B, N, K) 
     >>> v = torch.randn(B, N, M)
     >>> out = unpr(u, v)
     >>> out.shape
