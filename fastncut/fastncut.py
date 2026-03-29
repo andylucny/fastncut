@@ -3,7 +3,7 @@ This is the implementation of a fast algorithm for estimating the minimal normal
 Andrej Lucny, 2025, lucny@fmph.uniba.sk
 """
 
-from typing import Optional, Union, Tuple, List, Literal
+from typing import Optional, Union, Tuple, List, Literal 
 import torch
 from torch import Tensor
 import torch.nn as nn
