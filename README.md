@@ -12,6 +12,10 @@ The ingenious idea of Shi & Malik was brought into practice.
 pip install fastncut
 ```
 
+## Documentation
+
+<a href="https://www.agentspace.org/fastncut/fastncut.html"> API </a>
+
 ## Usage
 
 ```bash
