@@ -484,7 +484,7 @@ def targetFromMask(
     custom_b: Tensor = None, #(B)
     eps: float = 1e-7,
 ) -> Tuple[Tensor, Tensor]: # (B,H*W), (B)
-    """Calculate the eigenvector corresponding to the target mask (useful for training models)"""
+    """Calculate the eigenvector corresponding to the target mask (useful for training models)""" 
     assert (d is not None) or (custom_b is not None)
     mask = mask.reshape(mask.shape[0],-1)
     if mask.dtype != torch.bool:
