@@ -1,3 +1,5 @@
+__version__ = "2.0.1"
+
 from .fastncut import ncut, Ncut
 from .fastncut import toCosSin, ToCosSin
 from .fastncut import extendWithPositionEncoding, ExtendWithPositionEncoding
