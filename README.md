@@ -14,7 +14,7 @@ pip install fastncut
 
 ## Documentation
 
-<a href="https://www.agentspace.org/fastncut/fastncut.html" target="_blank"> API </a>
+<a href="https://www.agentspace.org/fastncut/fastncut.html" target="_blank"> API </a> &nbsp; &nbsp;
 <a href="https://pypi.org/project/fastncut/" target="_blank"> PyPI </a>
 
 
