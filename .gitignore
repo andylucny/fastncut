@@ -215,3 +215,8 @@ __marimo__/
 _/
 pypi_api_token.txt
 tests.bat
+docs-init.bat
+docs-gener.bat
+docs-ext.py
+docs-post.py
+docs/
