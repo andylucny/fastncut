@@ -213,3 +213,5 @@ __marimo__/
 
 # trash
 _/
+pypi_api_token.txt
+tests.bat
