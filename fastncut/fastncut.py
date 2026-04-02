@@ -55,8 +55,8 @@ def ncut(
     features: Tensor,
     num_iters: int = 2,
     mask: Optional[Tensor] = None, 
-    init: Union[None, Tensor, Tuple[int, int], List[Tuple[int, int]], Literal["frame", "full", "random", "chessboard"]] = "frame",
-    data_format: Literal["hwc", "chw", "bhwc", "bchw"] = "chw",
+    init: Union[None, Tensor, int, List[int], Tuple[int, int], List[Tuple[int, int]], Literal["frame", "full", "random", "chessboard"]] = "frame",
+    data_format: Literal["hwc", "chw", "nc", "bhwc", "bchw", "bnc"] = "chw",
     patience: int = 1,
     return_all: bool = False,
     border_size: int = 2,
@@ -75,14 +75,18 @@ def ncut(
         argument:
         - "hwc": (Height, Width, Channels) 
         - "chw": (Channels, Height, Width) - Default
+        - "nc": (Length, Channels) - no spatial grid
         - "bhwc": (Batch, Height, Width, Channels) 
         - "bchw": (Batch, Channels, Height, Width) 
+        - "bnc": (Batch, Length, Channels) - no spatial grid
 
     num_iters : int, optional
         Number of iterations to perform. 
         Default is 1. 
         The optimal value for intensity features is 2. 
-        For hundreds of features 4 is recommended.
+        For hundreds of features, 4 is recommended.
+        For very small resolutions like 28x28, 8 is recommended.
+        For trainable module of neural network, 1 is recommended.
         When `num_iters` is zero, the algorithm iterates until the bipartition is stable for `patience` times.
         (This mechanism serves for the investigation only; it is not proper for production.)
 
@@ -92,7 +96,7 @@ def ncut(
         Note: Unfortunately, the shape (Batch, Height, Width) is not supported.
               More calls with the batch size one are preferred in this case.
               It is the same as we cannot have various resolutions in one batch.
-    
+
     init : torch.Tensor or None, optional
         An optional initial tensor used to initialize the fastncut process or a kind of its generation.
         It indicates the resulting polarity of the bipartition mask.
@@ -127,22 +131,36 @@ def ncut(
       As a result, it is linear instead of quadratic, working for a specific kind of similarity only (cosine similarity).
 
     """
-    # features are expected to have shape (B,H,W,C) 
-    if features.dim() == 4 and data_format[0] != 'b':
-        data_format = "b" + data_format
-    if data_format in ("hwc", "chw"):
-        features = features.unsqueeze(0) # add B
-    if data_format in ("bchw", "chw"):
-        features = features.permute(0,2,3,1) # (B,C,H,W) -> (B,H,W,C)
-    B, H, W, C = features.shape  
+    if data_format in ("nc", "bnc"):
+        seq = True
+        # features are already in form of a sequence, without a spatial grid
+        if data_format == "nc": # (N,C) -> (B,N,C)
+            features = features.unsqueeze(0)
+        B, N, C = features.shape
+    else:
+        seq = False
+        # features are expected to have shape (B,H,W,C) 
+        if features.dim() == 4 and data_format[0] != 'b':
+            data_format = "b" + data_format
+        if data_format in ("hwc", "chw"):
+            features = features.unsqueeze(0) # add B
+        if data_format in ("bchw", "chw"):
+            features = features.permute(0,2,3,1) # (B,C,H,W) -> (B,H,W,C)
+        B, H, W, C = features.shape  
 
     # flatten and normalize the image features
     if mask is None:
-        feats = features.reshape(B, H*W, C)  # (B,H,W,C) -> (B,H*W,C)
+        if seq:
+            feats = features # (B,N,C)
+        else:
+            feats = features.reshape(B, H*W, C)  # (B,H,W,C) -> (B,H*W,C)
     else:
-        assert(mask.dim() == 2)
+        assert(mask.dim() == 1 if seq else 2)
         indices = torch.nonzero(mask, as_tuple=False) 
-        feats = features[:,indices[:,0],indices[:,1],:] # -> (B,N,C)
+        if seq:
+            feats = features[:,indices,:] # -> (B,N,C)
+        else:
+            feats = features[:,indices[:,0],indices[:,1],:] # -> (B,N,C)
    
     # fix features (option)
     if auto_fix:
@@ -153,28 +171,55 @@ def ncut(
     
     # generate initial value of the vector we will project (H,W)
     prompt = None
-    if init is None or init == "frame":
-        # frame, b ~= 0
-        init = - torch.ones(H, W, device=feats.device) 
-        init[border_size:H-border_size, border_size:W-border_size] = 1.0
-    elif init == "full":
-        # full, b == infty
-        init = torch.ones(H, W, device=feats.device)
-    elif init == "random":
-        # random, b ~= -1
-        init = torch.rand(H, W, device=feats.device)
-    elif init == "chessboard":
-        # chessboard, b = -1
-        init = ((torch.arange(H, device=feats.device).unsqueeze(1) + torch.arange(W, device=feats.device))%2).float()
-    elif isinstance(init, tuple):
-        prompt_x, prompt_y = init
-        prompt = features[:,prompt_y,prompt_x,:] # (B,C)
-    elif isinstance(init, list):
-        prompt_x, prompt_y = map(list, zip(*init))
-        advanced_indices = torch.arange(features.shape[0],device=features.device)
-        prompt = features[advanced_indices,prompt_y,prompt_x,:] # (B,C)
-    elif init.device != feats.device:
-        init.to(feats.device)
+    if seq:
+        if init is None or init in ("frame", "full"):
+            # full, b == infty, frame has no meaning
+            init = torch.ones(N, device=feats.device)
+        elif init == "random":
+            # random, b ~= -1
+            init = torch.rand(N, device=feats.device)
+        elif init == "chessboard":
+            # chessboard, b = -1
+            init = (torch.arange(N, device=feats.device)%2).float()
+        elif isinstance(init, int):
+            prompt = features[:,init,:] # (B,C)
+        elif isinstance(init, list):
+            assert len(init) == B
+            assert all(isinstance(item, int) for item in init)
+            advanced_indices = torch.arange(features.shape[0],device=features.device)
+            prompt = features[advanced_indices,init,:] # (B,C)
+        else:
+            assert isinstance(init, Tensor) and init.dim() == 1 and init.shape[0] == N
+            if init.device != feats.device:
+                init.to(feats.device)
+    else:
+        if init is None or init == "frame":
+            # frame, b ~= 0
+            init = - torch.ones(H, W, device=feats.device) 
+            init[border_size:H-border_size, border_size:W-border_size] = 1.0
+        elif init == "full":
+            # full, b == infty
+            init = torch.ones(H, W, device=feats.device)
+        elif init == "random":
+            # random, b ~= -1
+            init = torch.rand(H, W, device=feats.device)
+        elif init == "chessboard":
+            # chessboard, b = -1
+            init = ((torch.arange(H, device=feats.device).unsqueeze(1) + torch.arange(W, device=feats.device))%2).float()
+        elif isinstance(init, tuple):
+            assert len(init) == 2
+            prompt_x, prompt_y = init
+            prompt = features[:,prompt_y,prompt_x,:] # (B,C)
+        elif isinstance(init, list):
+            assert len(init) == B
+            assert all(isinstance(item, tuple) and len(item) == 2 and all(isinstance(item_i, int) for item_i in item) for item in init)
+            prompt_x, prompt_y = map(list, zip(*init))
+            advanced_indices = torch.arange(features.shape[0],device=features.device)
+            prompt = features[advanced_indices,prompt_y,prompt_x,:] # (B,C)
+        else:
+            assert isinstance(init, Tensor) and init.dim() == 2 and init.shape[0] == H and init.shape[1] == W
+            if init.device != feats.device:
+                init.to(feats.device)
 
     # initialize the fastncut algorithm
     d = torch.bmm(feats,feats.sum(dim=1).unsqueeze(2))  # (B,H*W or N,1) 
@@ -188,17 +233,30 @@ def ncut(
         eigenvector = torch.bmm(feats, prompt.unsqueeze(-1)) # (B,H*W or N,1)
         if return_all:
             if mask is None:
-                init = eigenvector.view(B,H,W)
+                if seq:
+                    init = eigenvector
+                else:
+                    init = eigenvector.view(B,H,W)
             else:
-                init = torch.zeros(B, H, W, dtype=eigenvector.dtype, device=eigenvector.device)
-                init[:,indices[:,0],indices[:,1]] = eigenvector.squeeze(2)
-                init = init.view(B,H,W)
+                if seq:
+                    init = torch.zeros(B, N, dtype=eigenvector.dtype, device=eigenvector.device)
+                    init[:,indices] = eigenvector.squeeze(2) # (B,N)
+                else:
+                    init = torch.zeros(B, H, W, dtype=eigenvector.dtype, device=eigenvector.device)
+                    init[:,indices[:,0],indices[:,1]] = eigenvector.squeeze(2)
+                    init = init.view(B,H,W)
             if B == 1:
-                init = init.squeeze(0)
+                init = init.squeeze(0) # (H,W) or (N)
     elif mask is None:
-        eigenvector = init.view(1,H*W).repeat(B, 1).unsqueeze(-1) # (B,H*W,1)
+        if seq:
+            eigenvector = init.view(1,N).repeat(B, 1).unsqueeze(-1) # (B,N,1)
+        else:
+            eigenvector = init.view(1,H*W).repeat(B, 1).unsqueeze(-1) # (B,H*W,1)
     else:
-        eigenvector = init[indices[:,0],indices[:,1]].repeat(B, 1).unsqueeze(-1) # (B,N,1)
+        if seq:
+            eigenvector = init[indices].repeat(B, 1).unsqueeze(-1) # (B,N,1)
+        else:
+            eigenvector = init[indices[:,0],indices[:,1]].repeat(B, 1).unsqueeze(-1) # (B,N,1)
     eigenvector = torch.nn.functional.normalize(eigenvector,dim=1)
     
     # repeat projection of the vector to let it converge to the eigenvector
@@ -211,11 +269,18 @@ def ncut(
 
         if num_iters == 0 or return_all or i == num_iters:
             if mask is None:
-                bipartition = (eigenvector > 0).view(B,H,W)
+                if seq:
+                    bipartition = (eigenvector > 0).view(B,N)
+                else:
+                    bipartition = (eigenvector > 0).view(B,H,W)
             else:
-                bipartition = torch.zeros(B, H, W, dtype=torch.bool, device=eigenvector.device)
-                bipartition[:,indices[:,0],indices[:,1]] = (eigenvector.squeeze(2) > 0)
-                bipartition = bipartition.view(B,H,W)
+                if seq:
+                    bipartition = torch.zeros(B, N, dtype=torch.bool, device=eigenvector.device)
+                    bipartition[:,indices] = (eigenvector.squeeze(2) > 0) # (B,N)
+                else:
+                    bipartition = torch.zeros(B, H, W, dtype=torch.bool, device=eigenvector.device)
+                    bipartition[:,indices[:,0],indices[:,1]] = (eigenvector.squeeze(2) > 0)
+                    bipartition = bipartition.view(B,H,W)
 
         # termination conditions
         if num_iters == 0:
@@ -239,7 +304,7 @@ def ncut(
         
         i += 1
 
-    if data_format in ("hwc", "chw"):
+    if data_format in ("hwc", "chw", "nc"):
         bipartition = bipartition.squeeze(0) # remove B
         if return_all:
             intermediates = [ intermediate.squeeze(0) for intermediate in intermediates ]
@@ -270,7 +335,7 @@ class Ncut(nn.Module):
     def __init__(self, 
         num_iters: int = 1,
         init: Union[None, Tensor, Literal["frame", "full", "random", "chessboard"]] = "frame",
-        data_format: Literal["bhwc", "bchw"] = "bchw",
+        data_format: Literal["bhwc", "bchw", "bnc"] = "bchw",
         auto_fix: bool = False,
     ):
         super(Ncut, self).__init__()

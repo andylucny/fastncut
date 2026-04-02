@@ -41,7 +41,7 @@ def noised(x, probability=0.1):
 def blur(x, kernel_size=9, sigma=2.0):
     return gaussian_blur(x.unsqueeze(0), kernel_size=kernel_size, sigma=sigma).squeeze(0)
 
-def eq(x, y, tolerance=1.0):
+def eq(x, y, tolerance=1.0): # 1.0 .. 100% required, 0.5 .. 50% required
     return (x == y).float().mean().item() >= tolerance
 
 def topng(x, prompt_x=None, prompt_y=None):
@@ -272,3 +272,23 @@ def test_auto_fix():
     feats = (torch.rand(2, 32, 1080, 1620).float()-0.5).to(device)
     result = ncut(feats, data_format='bchw', num_iters=1, auto_fix=True, return_all=True)
     assert result['d'][0].min().item() > 1e-5 
+
+def test_nc():
+    x = island().unsqueeze(-1)
+    x = x.to(device)
+    x = toCosSin(x, data_format="hwc")
+    result1 = ncut(x, data_format='hwc', num_iters=2)
+    print(result1.shape)
+    x = x.view(-1,2) # (N,C)
+    result2 = ncut(x, data_format='nc', num_iters=2)
+    print(result2.shape)
+    assert eq(result1.view(-1),result2)
+    result3 = ncut(x, data_format='nc', init='chessboard', num_iters=2)
+    assert eq(result3,result2)
+    result4 = ncut(x, data_format='nc', init='random', num_iters=2)
+    result5 = ncut(x, data_format='nc', init=0, num_iters=1)
+    assert eq(~result5,result2)
+    xbatch = torch.stack([x,x])
+    result6 = ncut(xbatch, data_format='bnc', init=[0,1], num_iters=1)
+    assert eq(~result6[0],result2)
+    assert eq(~result6[1],result2)
