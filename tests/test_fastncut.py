@@ -278,17 +278,21 @@ def test_nc():
     x = x.to(device)
     x = toCosSin(x, data_format="hwc")
     result1 = ncut(x, data_format='hwc', num_iters=2)
-    print(result1.shape)
+    assert result1.dim() == 2
     x = x.view(-1,2) # (N,C)
     result2 = ncut(x, data_format='nc', num_iters=2)
-    print(result2.shape)
+    assert result2.dim() == 1
     assert eq(result1.view(-1),result2)
     result3 = ncut(x, data_format='nc', init='chessboard', num_iters=2)
     assert eq(result3,result2)
     result4 = ncut(x, data_format='nc', init='random', num_iters=2)
     result5 = ncut(x, data_format='nc', init=0, num_iters=1)
+    assert result5.dim() == 1
     assert eq(~result5,result2)
     xbatch = torch.stack([x,x])
     result6 = ncut(xbatch, data_format='bnc', init=[0,1], num_iters=1)
     assert eq(~result6[0],result2)
     assert eq(~result6[1],result2)
+    result7 = ncut(x, data_format='nc', mask=result5)
+    result8 = ncut(xbatch, data_format='bnc', mask=result5)
+    assert eq(result8[0],result7)

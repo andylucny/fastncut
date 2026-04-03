@@ -219,4 +219,6 @@ docs-init.bat
 docs-gener.bat
 docs-ext.py
 docs-post.py
+purge.bat
 docs/
+iterations.txt

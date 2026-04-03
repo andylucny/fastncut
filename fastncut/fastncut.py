@@ -158,7 +158,7 @@ def ncut(
         assert(mask.dim() == 1 if seq else 2)
         indices = torch.nonzero(mask, as_tuple=False) 
         if seq:
-            feats = features[:,indices,:] # -> (B,N,C)
+            feats = features[:,indices[:,0],:] # -> (B,N,C)
         else:
             feats = features[:,indices[:,0],indices[:,1],:] # -> (B,N,C)
    
@@ -240,7 +240,7 @@ def ncut(
             else:
                 if seq:
                     init = torch.zeros(B, N, dtype=eigenvector.dtype, device=eigenvector.device)
-                    init[:,indices] = eigenvector.squeeze(2) # (B,N)
+                    init[:,indices[:,0]] = eigenvector.squeeze(2) # (B,N)
                 else:
                     init = torch.zeros(B, H, W, dtype=eigenvector.dtype, device=eigenvector.device)
                     init[:,indices[:,0],indices[:,1]] = eigenvector.squeeze(2)
@@ -254,7 +254,7 @@ def ncut(
             eigenvector = init.view(1,H*W).repeat(B, 1).unsqueeze(-1) # (B,H*W,1)
     else:
         if seq:
-            eigenvector = init[indices].repeat(B, 1).unsqueeze(-1) # (B,N,1)
+            eigenvector = init[indices[:,0]].repeat(B, 1).unsqueeze(-1) # (B,N,1)
         else:
             eigenvector = init[indices[:,0],indices[:,1]].repeat(B, 1).unsqueeze(-1) # (B,N,1)
     eigenvector = torch.nn.functional.normalize(eigenvector,dim=1)
@@ -276,7 +276,7 @@ def ncut(
             else:
                 if seq:
                     bipartition = torch.zeros(B, N, dtype=torch.bool, device=eigenvector.device)
-                    bipartition[:,indices] = (eigenvector.squeeze(2) > 0) # (B,N)
+                    bipartition[:,indices[:,0]] = (eigenvector.squeeze(2) > 0) # (B,N)
                 else:
                     bipartition = torch.zeros(B, H, W, dtype=torch.bool, device=eigenvector.device)
                     bipartition[:,indices[:,0],indices[:,1]] = (eigenvector.squeeze(2) > 0)
