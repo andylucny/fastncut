@@ -21,17 +21,42 @@ pip install fastncut
 ## Usage
 
 ```bash
+import torch
+import numpy as np
 from fastncut import ncut, toCosSin, extendWithFix
+device = 'cpu' # 'cuda'
 ```
 
-for intensity image (H,W), 0-255:
+### for intensity image (H,W), 0-255:
+
+load the image:
+
+```bash
+import cv2
+image = cv2.imread('man.png',cv2.IMREAD_GRAYSCALE)
+```
+
+or
+
+```bash
+from PIL import Image
+image = np.array(Image.open('man.png'))
+```
+
+then process it into a feature map (2,H,W) and apply the bipartioning
 
 ```bash
 blob = toCosSin(torch.tensor(image,device=device).float().unsqueeze(0)/255.0)
 bipartition = ncut(blob,num_iters=2).cpu().numpy().astype(np.uint8)*255
 ```
 
-for feature map (C,H,W):
+and save the result:
+
+```bash
+cv2.imwrite('bipartition.png',bipartition) # or ~bipartition
+```
+
+### for feature map (C,H,W):
 
 ```bash
 features = F.interpolate(features, size=(image_height, image_width), mode="bilinear", align_corners=False)
@@ -47,7 +72,7 @@ bipartition = ncut(extendWithFix(features), num_iters=4)
 
 set `num_iters=8` for small resolutions (without interpolation)
 
-See notebooks
+See notebooks (each notebook is provided in two versions: with and without outputs)
 
 ## Model zoo
 
