@@ -195,8 +195,8 @@ def ncut(
     else:
         if init is None or init == "frame":
             # frame, b ~= 0
-            init = - torch.ones(H, W, device=feats.device) 
-            init[border_size:H-border_size, border_size:W-border_size] = 1.0
+            init = torch.ones(H-2*border_size, W-2*border_size, device=feats.device)
+            init = F.pad(init, (border_size, border_size, border_size, border_size), mode="constant", value=-1.0)
         elif init == "full":
             # full, b == infty
             init = torch.ones(H, W, device=feats.device)
